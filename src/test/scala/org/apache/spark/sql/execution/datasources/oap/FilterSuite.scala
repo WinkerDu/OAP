@@ -1335,7 +1335,7 @@ class FilterSuite extends QueryTest with SharedOapContext with BeforeAndAfterEac
   }
 
   test("get columns hit index") {
-    val rowRDD = spark.sparkContext.parallelize(1 to 100, 3).map(i =>
+    val rowRDD = spark.sparkContext.parallelize(1 to 100).map(i =>
       Seq(i, s"this is row $i")).map(Row.fromSeq)
     val schema =
       StructType(
@@ -1366,8 +1366,8 @@ class FilterSuite extends QueryTest with SharedOapContext with BeforeAndAfterEac
     }
   }
 
-  test("test columns hit index when in optimized to inset") {
-    val rowRDD = spark.sparkContext.parallelize(1 to 100, 3).map(i =>
+  test("OAP-930 test columns hit index when in optimized to inset") {
+    val rowRDD = spark.sparkContext.parallelize(0 to 100, 3).map(i =>
       Seq(i, s"this is row $i")).map(Row.fromSeq)
     val schema =
       StructType(
@@ -1377,16 +1377,14 @@ class FilterSuite extends QueryTest with SharedOapContext with BeforeAndAfterEac
     df.createOrReplaceTempView("t")
 
     sql("insert overwrite table parquet_test select * from t")
-    withIndex(
-      TestIndex("parquet_test", "idx1")) {
+    withIndex(TestIndex("parquet_test", "idx1")) {
       sql("create oindex idx1 on parquet_test (a)")
-      val df = sql("SELECT * from parquet_test WHERE a in(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)")
-      checkAnswer(df, Row(1, "this is row 1") :: Row(2, "this is row 2")
-        :: Row(3, "this is row 3") :: Row(4, "this is row 4")
-        :: Row(5, "this is row 5") :: Row(6, "this is row 6")
-        :: Row(7, "this is row 7") :: Row(8, "this is row 8")
-        :: Row(9, "this is row 9") :: Row(10, "this is row 10")
-        :: Row(11, "this is row 11") :: Nil)
+      // create sequence with one more element than in-to-inSet optimized threshold
+      val intSeq = 0 to sqlContext.conf.optimizerInSetConversionThreshold
+      val df = sql(s"SELECT * from parquet_test WHERE a in(" +
+        s"${intSeq.map(_.toString).mkString(",")})")
+      val rowList = intSeq.map(i => Row(i, s"this is row $i")) ++ Nil
+      checkAnswer(df, rowList)
       val ret = getColumnsHitIndex(df.queryExecution.sparkPlan)
       assert(ret.keySet.size == 1 && ret.contains("a"))
     }

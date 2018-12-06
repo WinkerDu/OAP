@@ -1377,7 +1377,7 @@ class FilterSuite extends QueryTest with SharedOapContext with BeforeAndAfterEac
       val intSeq = 0 to sqlContext.conf.optimizerInSetConversionThreshold
       val df = sql(s"SELECT * from parquet_test WHERE a in(" +
         s"${intSeq.map(_.toString).mkString(",")})")
-      val rowList = intSeq.map(i => Row(i, s"this is row $i")) ++ Nil
+      val rowList = intSeq.map(i => Row(i, s"this is row $i"))
       checkAnswer(df, rowList)
       val ret = getColumnsHitIndex(df.queryExecution.sparkPlan)
       assert(ret.keySet.size == 1 && ret.contains("a"))

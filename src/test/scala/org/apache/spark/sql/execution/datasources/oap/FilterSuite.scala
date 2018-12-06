@@ -1335,7 +1335,7 @@ class FilterSuite extends QueryTest with SharedOapContext with BeforeAndAfterEac
   }
 
   test("get columns hit index") {
-    val rowRDD = spark.sparkContext.parallelize(1 to 100).map(i =>
+    val rowRDD = spark.sparkContext.parallelize(1 to 100, 3).map(i =>
       Seq(i, s"this is row $i")).map(Row.fromSeq)
     val schema =
       StructType(
@@ -1367,14 +1367,8 @@ class FilterSuite extends QueryTest with SharedOapContext with BeforeAndAfterEac
   }
 
   test("OAP-930 test columns hit index when in optimized to inset") {
-    val rowRDD = spark.sparkContext.parallelize(0 to 100, 3).map(i =>
-      Seq(i, s"this is row $i")).map(Row.fromSeq)
-    val schema =
-      StructType(
-        StructField("a", IntegerType) ::
-          StructField("b", StringType) :: Nil)
-    val df = spark.createDataFrame(rowRDD, schema)
-    df.createOrReplaceTempView("t")
+    val data: Seq[(Int, String)] = (0 to 100).map { i => (i, s"this is row $i") }
+    data.toDF("a", "b").createOrReplaceTempView("t")
 
     sql("insert overwrite table parquet_test select * from t")
     withIndex(TestIndex("parquet_test", "idx1")) {

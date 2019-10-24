@@ -17,7 +17,7 @@
 
   <groupId>com.intel.ssg.bdt</groupId>
   <artifactId>oap</artifactId>
-  <version>0.6.0-SNAPSHOT</version>
+  <version>1.0.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
   <name>OAP</name>
@@ -645,6 +645,7 @@
             <configuration>
               <sources>
                 <source>src/main/spark2.3.2/java</source>
+                <source>src/main/parquet-1.8.3/java</source>
                 <source>src/main/spark2.3.2/scala</source>
               </sources>
             </configuration>

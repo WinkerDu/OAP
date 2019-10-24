@@ -125,13 +125,52 @@ object OapConf {
       .doubleConf
       .createWithDefault(0.7)
 
+  val OAP_DATAFIBER_USE_FIBERCACHE_RATIO =
+    SqlConfAdapter.buildConf("spark.sql.oap.dataCache.use.fiberCache.ratio")
+      .internal()
+      .doc("Define the ratio of data cache use fiber cache ratio " +
+        "when enable cache separation for single physical storage. " +
+        "This is not available under mix mode because the index and data " +
+        "will be stored in different physical storage")
+      .doubleConf
+      .createWithDefault(0.8)
+
+  val OAP_INDEX_DATA_SEPARATION_ENABLE =
+    SqlConfAdapter.buildConf("spark.sql.oap.index.data.cache.separation.enable")
+      .internal()
+      .doc("This is to enable index data cache separation feature including mix memory manager")
+      .booleanConf
+      .createWithDefault(false)
+
   val OAP_FIBERCACHE_MEMORY_MANAGER =
     SqlConfAdapter.buildConf("spark.sql.oap.fiberCache.memory.manager")
       .internal()
-      .doc("Sets the implement of memory manager, it only supports offheap(DRAM OFF_HEAP) and " +
-        "(PM) Intel Optane DC persistent memory currently.")
+      .doc("Sets the implement of memory manager, it currently supports offheap(DRAM OFF_HEAP), " +
+        "pm(Intel Optane DC persistent memory) and mix(A combination of offheap and pm)." +
+        "To enable mix mode, you need to set " +
+        "spark.sql.oap.index.data.cache.separation.enable to true")
       .stringConf
       .createWithDefault("offheap")
+
+  val OAP_MIX_INDEX_MEMORY_MANAGER =
+    SqlConfAdapter.buildConf("spark.sql.oap.mix.index.memory.manager")
+      .internal()
+      .doc("Sets the implement of index memory manager in mix mode," +
+        "it only supports offheap(DRAM OFF_HEAP) and " +
+        "(PM) Intel Optane DC persistent memory currently." +
+        "It should be different from spark.sql.oap.mix.data.memory.manager")
+      .stringConf
+      .createWithDefault("offheap")
+
+  val OAP_MIX_DATA_MEMORY_MANAGER =
+    SqlConfAdapter.buildConf("spark.sql.oap.mix.data.memory.manager")
+      .internal()
+      .doc("Sets the implement of data memory manager in mix mode," +
+        "it only supports offheap(DRAM OFF_HEAP) and " +
+        "(PM) Intel Optane DC persistent memory currently." +
+        "It should be different from spark.sql.oap.mix.index.memory.manager")
+      .stringConf
+      .createWithDefault("pm")
 
   val OAP_FIBERCACHE_PERSISTENT_MEMORY_CONFIG_FILE =
     SqlConfAdapter.buildConf("spark.sql.oap.fiberCache.persistent.memory.config.file")
@@ -250,6 +289,21 @@ object OapConf {
       .intConf
       .createWithDefault(1)
 
+  val OAP_INDEXER_USE_CONSTANT_TIMESTAMPS_ENABLED =
+    SqlConfAdapter.buildConf("spark.sql.oap.oindex.use.constant.timestamps")
+      .internal()
+      .doc("To indicate if enable/disable use constant timestamps when create oindex")
+      .booleanConf
+      .createWithDefault(false)
+
+  val OAP_INDEXER_TIMESTAMPS_CONSTANT =
+    SqlConfAdapter.buildConf("spark.sql.oap.oindex.timestamps.constant")
+      .internal()
+      .doc("If 'spark.sql.oap.oindex.use.constant.timestamps' is true, use this value to fill " +
+        "index meta timestamps")
+      .longConf
+      .createWithDefault(1555299314969L)
+
   val OAP_BTREE_ROW_LIST_PART_SIZE =
     SqlConfAdapter.buildConf("spark.sql.oap.btree.rowList.part.size")
       .internal()
@@ -294,6 +348,13 @@ object OapConf {
       .booleanConf
       .createWithDefault(false)
 
+  val OAP_ORC_DATA_CACHE_ENABLED =
+    SqlConfAdapter.buildConf("spark.sql.oap.orc.data.cache.enable")
+      .internal()
+      .doc("To indicate if enable orc data cache, default false")
+      .booleanConf
+      .createWithDefault(false)
+
   val OAP_PARQUET_INDEX_ENABLED =
     SqlConfAdapter.buildConf("spark.sql.oap.parquet.index.enable")
       .internal()
@@ -309,12 +370,34 @@ object OapConf {
       .stringConf
       .createWithDefault("")
 
-  val ORC_VECTORIZED_READER_ENABLED =
-    SqlConfAdapter.ORC_VECTORIZED_READER_ENABLED
+  val OAP_INDEX_STATISTIC_EXTERNALSORTER_ENABLE =
+    SqlConfAdapter.buildConf("spark.sql.oap.index.statistic.externalsorter.enable")
+      .internal()
+      .doc("To indicate if to enable externalsorter for statistic calculation")
+      .booleanConf
+      .createWithDefault(true)
 
-  val COLUMN_VECTOR_OFFHEAP_ENABLED =
-    SqlConfAdapter.COLUMN_VECTOR_OFFHEAP_ENABLED
+  val OAP_ENABLE_DATA_FIBER_CACHE_COMPRESSION =
+    SqlConfAdapter.buildConf("spark.sql.oap.data.fiber.cache.compress.enable")
+      .internal()
+      .doc("To indicate if enable/disable data fiber cache compression")
+      .booleanConf
+      .createWithDefault(false)
 
-  val ORC_COPY_BATCH_TO_SPARK =
-    SqlConfAdapter.ORC_COPY_BATCH_TO_SPARK
+  val OAP_DATA_FIBER_CACHE_COMPRESSION_CODEC =
+    SqlConfAdapter.buildConf("spark.sql.oap.data.fiber.cache.compression.codec")
+      .internal()
+      .doc("Sets the compression codec use when writing data fiber cache." +
+        " Acceptable values include: LZ4, LZF, SNAPPY, ZSTD.")
+      .stringConf
+      .transform(_.toUpperCase())
+      .checkValues(Set("LZ4", "LZF", "SNAPPY", "ZSTD"))
+      .createWithDefault("LZ4")
+
+  val OAP_DATA_FIBER_CACHE_COMPRESSION_SIZE =
+    SqlConfAdapter.buildConf("spark.sql.oap.data.fiber.cache.compression.size")
+      .internal()
+      .doc("The oap data fiber compression unit length")
+      .intConf
+      .createWithDefault(4096)
 }

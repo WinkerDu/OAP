@@ -27,7 +27,6 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{SortDirection, UnsafeRow}
 import org.apache.spark.sql.execution.datasources.oap._
-import org.apache.spark.sql.execution.datasources.oap.io.OapIndexInfo
 import org.apache.spark.sql.execution.datasources.oap.statistics.StatsAnalysisResult
 import org.apache.spark.sql.internal.oap.OapConf
 import org.apache.spark.sql.sources._
@@ -98,11 +97,7 @@ private[oap] abstract class IndexScanner(idxMeta: IndexMeta)
           StatsAnalysisResult.USE_INDEX
         } else {
           // Not blindly use the index, determining by more policies
-          val res = analysisResByStatistics(indexPath, dataPath, conf)
-          if (res != StatsAnalysisResult.FULL_SCAN) {
-            OapIndexInfo.partitionOapIndex.put(dataPath.toString, true)
-          }
-          res
+          analysisResByStatistics(indexPath, dataPath, conf)
         }
       }
     }
@@ -339,7 +334,11 @@ private[oap] class IndexScanners(val scanners: Seq[IndexScanner])
       false
     } else {
       if (analysisResults.forall(_._2 != StatsAnalysisResult.SKIP_INDEX)) {
-        actualUsedScanners = analysisResults.map(_._1)
+        // OAP#1031 we should filter FULL_SCAN when USE_INDEX scene
+        // because of FULL_SCAN may come from index file not exists in this partition and
+        // FULL_SCAN Scanner needn't initialize index data.
+        actualUsedScanners =
+          analysisResults.filter(_._2 != StatsAnalysisResult.FULL_SCAN).map(_._1)
       }
       true
     }

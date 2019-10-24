@@ -22,12 +22,15 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantReadWriteLock
 
 import com.google.common.cache._
+import org.apache.hadoop.conf.Configuration
+import org.apache.parquet.format.CompressionCodec
 
 import org.apache.spark.SparkEnv
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.execution.datasources.OapException
 import org.apache.spark.sql.execution.datasources.oap.io._
 import org.apache.spark.sql.execution.datasources.oap.utils.CacheStatusSerDe
+import org.apache.spark.sql.internal.oap.OapConf
 import org.apache.spark.sql.oap.OapRuntime
 import org.apache.spark.util.Utils
 import org.apache.spark.util.collection.OapBitSet
@@ -100,10 +103,29 @@ private[sql] class FiberCacheManager(
   private val SIMPLE_CACHE = "simple"
   private val DEFAULT_CACHE_STRATEGY = GUAVA_CACHE
 
+  private var _dataCacheCompressEnable = sparkEnv.conf.get(
+    OapConf.OAP_ENABLE_DATA_FIBER_CACHE_COMPRESSION)
+  private var _dataCacheCompressionCodec = sparkEnv.conf.get(
+    OapConf.OAP_DATA_FIBER_CACHE_COMPRESSION_CODEC)
+  private val _dataCacheCompressionSize = sparkEnv.conf.get(
+    OapConf.OAP_DATA_FIBER_CACHE_COMPRESSION_SIZE)
+
+  def dataCacheCompressEnable: Boolean = _dataCacheCompressEnable
+  def dataCacheCompressionCodec: String = _dataCacheCompressionCodec
+  def dataCacheCompressionSize: Int = _dataCacheCompressionSize
+
   private val cacheBackend: OapCache = {
     val cacheName = sparkEnv.conf.get("spark.oap.cache.strategy", DEFAULT_CACHE_STRATEGY)
     if (cacheName.equals(GUAVA_CACHE)) {
-      new GuavaOapCache(memoryManager.cacheMemory, memoryManager.cacheGuardianMemory)
+      val indexDataSeparationEnable = sparkEnv.conf.getBoolean(
+        OapConf.OAP_INDEX_DATA_SEPARATION_ENABLE.key,
+        OapConf.OAP_INDEX_DATA_SEPARATION_ENABLE.defaultValue.get
+      )
+      new GuavaOapCache(
+        memoryManager.dataCacheMemory,
+        memoryManager.indexCacheMemory,
+        memoryManager.cacheGuardianMemory,
+        indexDataSeparationEnable)
     } else if (cacheName.equals(SIMPLE_CACHE)) {
       new SimpleOapCache()
     } else {
@@ -122,6 +144,12 @@ private[sql] class FiberCacheManager(
     logDebug(s"Getting Fiber: $fiber")
     cacheBackend.get(fiber)
   }
+  // only for unit test
+  def setCompressionConf(dataEnable: Boolean = false,
+      dataCompressCodec: String = "SNAPPY"): Unit = {
+    _dataCacheCompressEnable = dataEnable
+    _dataCacheCompressionCodec = dataCompressCodec
+  }
 
   def releaseIndexCache(indexName: String): Unit = {
     logDebug(s"Going to remove all index cache of $indexName")
@@ -135,9 +163,18 @@ private[sql] class FiberCacheManager(
   }
 
   // Used by test suite
-  private[filecache] def releaseFiber(fiber: TestFiberId): Unit = {
-    if (cacheBackend.getIfPresent(fiber) != null) {
-      cacheBackend.invalidate(fiber)
+  private[filecache] def releaseFiber(fiber: FiberId): Unit = {
+    if (fiber.isInstanceOf[TestDataFiberId] || fiber.isInstanceOf[TestIndexFiberId]) {
+      if (cacheBackend.getIfPresent(fiber) != null) {
+        cacheBackend.invalidate(fiber)
+      }
+    }
+  }
+
+  // Only used by test suite
+  private[filecache] def enableGuavaCacheSeparation(): Unit = {
+    if (cacheBackend.isInstanceOf[GuavaOapCache]) {
+      cacheBackend.asInstanceOf[GuavaOapCache].enableCacheSeparation()
     }
   }
 

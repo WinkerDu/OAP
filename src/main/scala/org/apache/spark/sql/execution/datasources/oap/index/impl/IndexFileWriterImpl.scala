@@ -17,12 +17,14 @@
 
 package org.apache.spark.sql.execution.datasources.oap.index.impl
 
-import java.io.OutputStream
+import java.io.{File, FileInputStream, FileOutputStream, OutputStream}
+import java.nio.channels.FileChannel
 
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.Path
+import org.apache.hadoop.fs.{FSDataInputStream, Path}
 
 import org.apache.spark.sql.execution.datasources.oap.index.IndexFileWriter
+import org.apache.spark.sql.internal.oap.OapConf
 
 private[index] case class IndexFileWriterImpl(
     configuration: Configuration,
@@ -30,6 +32,15 @@ private[index] case class IndexFileWriterImpl(
 
   protected override val os: OutputStream =
     indexPath.getFileSystem(configuration).create(indexPath, true)
+
+  private val zeroCpEnable = configuration.getBoolean(
+    OapConf.OAP_INDEX_FILE_WRITER_ZERO_COPY_ENABLE.key,
+    OapConf.OAP_INDEX_FILE_WRITER_ZERO_COPY_ENABLE.defaultValue.get)
+
+  private val outChannel = if (zeroCpEnable) {
+    new FileOutputStream(new File(
+      s"${indexPath.getParent}/${indexPath.getName}"), true).getChannel
+  } else null
 
   // Give RecordWriter a chance which file it's writing to.
   override def getName: String = indexPath.toString
@@ -39,20 +50,50 @@ private[index] case class IndexFileWriterImpl(
     IndexFileWriterImpl(configuration, tempFileName)
   }
 
+  override def close(): Unit = {
+    if (outChannel != null) {
+      outChannel.close()
+    }
+    super.close()
+  }
+
   override def writeRowId(tempWriter: IndexFileWriter): Unit = {
     val path = new Path(tempWriter.getName)
-    val is = path.getFileSystem(configuration).open(path)
-    val length = path.getFileSystem(configuration).getFileStatus(path).getLen
-    val bufSize = configuration.getInt("io.file.buffer.size", 4096)
-    val bytes = new Array[Byte](bufSize)
-    var remaining = length
-    while (remaining > 0) {
-      val readSize = math.min(bufSize, remaining).toInt
-      is.readFully(bytes, 0, readSize)
-      os.write(bytes, 0, readSize)
-      remaining -= readSize
+    val length: Long = path.getFileSystem(configuration).getFileStatus(path).getLen
+
+    if (zeroCpEnable) {
+      var inChannel: FileChannel = null
+      try {
+        inChannel = new FileInputStream(new File(s"${path.getParent}/${path.getName}")).getChannel
+        var count: Long = 0
+        while (count < length) {
+          count += inChannel.transferTo(count, length - count, outChannel)
+        }
+      } finally {
+        if (inChannel != null) {
+          inChannel.close()
+        }
+        path.getFileSystem(configuration).delete(path, false)
+      }
+    } else {
+      val bufSize = configuration.getInt("io.file.buffer.size", 4096)
+      var is: FSDataInputStream = null
+      val bytes = new Array[Byte](bufSize)
+      try {
+        is = path.getFileSystem(configuration).open(path)
+        var remaining = length
+        while (remaining > 0) {
+          val readSize = math.min(bufSize, remaining).toInt
+          is.readFully(bytes, 0, readSize)
+          os.write(bytes, 0, readSize)
+          remaining -= readSize
+        }
+      } finally {
+        if (is != null) {
+          is.close()
+        }
+        path.getFileSystem(configuration).delete(path, false)
+      }
     }
-    is.close()
-    path.getFileSystem(configuration).delete(path, false)
   }
 }

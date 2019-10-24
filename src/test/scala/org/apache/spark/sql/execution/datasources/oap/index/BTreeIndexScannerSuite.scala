@@ -21,13 +21,14 @@ import scala.collection.mutable.ArrayBuffer
 
 import org.apache.hadoop.fs.Path
 
-import org.apache.spark.{SecurityManager, SparkConf, TaskContext, TaskContextImpl}
+import org.apache.spark.{SecurityManager, SparkConf, TaskContext}
 import org.apache.spark.memory.{TaskMemoryManager, TestMemoryManager}
 import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.JoinedRow
 import org.apache.spark.sql.catalyst.expressions.codegen.GenerateOrdering
 import org.apache.spark.sql.execution.datasources.oap.index.impl.IndexFileWriterImpl
+import org.apache.spark.sql.internal.oap.OapConf
 import org.apache.spark.sql.oap.adapter.TaskContextImplAdapter
 import org.apache.spark.sql.test.oap.SharedOapContext
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
@@ -55,6 +56,41 @@ class BTreeIndexScannerSuite extends SharedOapContext {
   override def afterEach(): Unit = {
     // TaskContext.get().asInstanceOf[TaskContextImpl].markTaskCompleted()
     TaskContext.unset()
+  }
+
+  private def checkNormalCase(reader: BTreeIndexRecordReaderV2) = {
+    // DUMMY_START <= x <= DUMMY_END
+    assert(reader.findRowIdRange(RangeInterval(
+      IndexScanner.DUMMY_KEY_START, IndexScanner.DUMMY_KEY_END,
+      includeStart = true, includeEnd = true)) === (0, 150))
+    // DUMMY_START < x <= Max
+    assert(reader.findRowIdRange(RangeInterval(
+      IndexScanner.DUMMY_KEY_START, InternalRow(299),
+      includeStart = true, includeEnd = true)) === (0, 150))
+    // DUMMY_START < x < Max
+    assert(reader.findRowIdRange(RangeInterval(
+      IndexScanner.DUMMY_KEY_START, InternalRow(299),
+      includeStart = true, includeEnd = false)) === (0, 149))
+    // Min <= x < DUMMY_END
+    assert(reader.findRowIdRange(RangeInterval(
+      InternalRow(1), IndexScanner.DUMMY_KEY_END,
+      includeStart = true, includeEnd = false)) === (0, 150))
+    // Min < x < DUMMY_END
+    assert(reader.findRowIdRange(RangeInterval(
+      InternalRow(1), IndexScanner.DUMMY_KEY_END,
+      includeStart = false, includeEnd = false)) === (1, 150))
+    // 2 < x <= 4 (Target not exist in values)
+    assert(reader.findRowIdRange(RangeInterval(
+      InternalRow(2), InternalRow(4), includeStart = false, includeEnd = true)) === (1, 2))
+    // 59 < x <= 119 (get the next position of target value)
+    assert(reader.findRowIdRange(RangeInterval(
+      InternalRow(59), InternalRow(119), includeStart = false, includeEnd = true)) === (30, 60))
+    // 1 < x < 1
+    assert(reader.findRowIdRange(RangeInterval(
+      InternalRow(1), InternalRow(1), includeStart = false, includeEnd = false)) === (1, 0))
+    // 1 <= x <= 1
+    assert(reader.findRowIdRange(RangeInterval(
+      InternalRow(1), InternalRow(1), includeStart = true, includeEnd = true)) === (0, 1))
   }
 
   test("test rowOrdering") {
@@ -129,6 +165,8 @@ class BTreeIndexScannerSuite extends SharedOapContext {
     assertPosition(91, 9, exists = true)
   }
 
+
+
   test("test findRowIdRange for normal case") {
     val schema = StructType(StructField("col", IntegerType) :: Nil)
     val path = new Path(Utils.createTempDir().getAbsolutePath, "tempIndexFile")
@@ -142,40 +180,32 @@ class BTreeIndexScannerSuite extends SharedOapContext {
     val reader =
       BTreeIndexRecordReader(configuration, schema, path).asInstanceOf[BTreeIndexRecordReaderV2]
     reader.initialize(path, new ArrayBuffer[RangeInterval]())
-
-    // DUMMY_START <= x <= DUMMY_END
-    assert(reader.findRowIdRange(RangeInterval(
-      IndexScanner.DUMMY_KEY_START, IndexScanner.DUMMY_KEY_END,
-      includeStart = true, includeEnd = true)) === (0, 150))
-    // DUMMY_START < x <= Max
-    assert(reader.findRowIdRange(RangeInterval(
-      IndexScanner.DUMMY_KEY_START, InternalRow(299),
-      includeStart = true, includeEnd = true)) === (0, 150))
-    // DUMMY_START < x < Max
-    assert(reader.findRowIdRange(RangeInterval(
-      IndexScanner.DUMMY_KEY_START, InternalRow(299),
-      includeStart = true, includeEnd = false)) === (0, 149))
-    // Min <= x < DUMMY_END
-    assert(reader.findRowIdRange(RangeInterval(
-      InternalRow(1), IndexScanner.DUMMY_KEY_END,
-      includeStart = true, includeEnd = false)) === (0, 150))
-    // Min < x < DUMMY_END
-    assert(reader.findRowIdRange(RangeInterval(
-      InternalRow(1), IndexScanner.DUMMY_KEY_END,
-      includeStart = false, includeEnd = false)) === (1, 150))
-    // 2 < x <= 4 (Target not exist in values)
-    assert(reader.findRowIdRange(RangeInterval(
-      InternalRow(2), InternalRow(4), includeStart = false, includeEnd = true)) === (1, 2))
-    // 59 < x <= 119 (get the next position of target value)
-    assert(reader.findRowIdRange(RangeInterval(
-      InternalRow(59), InternalRow(119), includeStart = false, includeEnd = true)) === (30, 60))
-    // 1 < x < 1
-    assert(reader.findRowIdRange(RangeInterval(
-      InternalRow(1), InternalRow(1), includeStart = false, includeEnd = false)) === (1, 0))
-    // 1 <= x <= 1
-    assert(reader.findRowIdRange(RangeInterval(
-      InternalRow(1), InternalRow(1), includeStart = true, includeEnd = true)) === (0, 1))
+    checkNormalCase(reader)
     reader.close()
+  }
+
+  test("test zero copy and stream copy for index file writer") {
+
+    def testCpValid(zeroCpEnable: Boolean): Unit = {
+      val schema = StructType(StructField("col", IntegerType) :: Nil)
+      val pathName = if (zeroCpEnable) "zeroCpIndexFile" else "streamCpIndexFile"
+      val Path = new Path(Utils.createTempDir().getAbsolutePath, pathName)
+      val config = spark.sessionState.newHadoopConf()
+      config.setBoolean(OapConf.OAP_INDEX_FILE_WRITER_ZERO_COPY_ENABLE.key, zeroCpEnable)
+      val zeroCpFileWriter = IndexFileWriterImpl(config, Path)
+      var writer = BTreeIndexRecordWriterV2(config, zeroCpFileWriter, schema)
+      (1 to 300 by 2).map(InternalRow(_)).foreach(writer.write(null, _))
+      writer.close(null)
+      var reader =
+        BTreeIndexRecordReader(configuration, schema, Path)
+          .asInstanceOf[BTreeIndexRecordReaderV2]
+      reader.initialize(Path, new ArrayBuffer[RangeInterval]())
+      checkNormalCase(reader)
+      reader.close()
+    }
+
+    testCpValid(true)
+    testCpValid(false)
   }
 
   test("findRowIdRange for isNull filter predicate: empty result") {

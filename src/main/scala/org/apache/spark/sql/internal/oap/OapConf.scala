@@ -400,4 +400,12 @@ object OapConf {
       .doc("The oap data fiber compression unit length")
       .intConf
       .createWithDefault(4096)
+
+  val OAP_INDEX_FILE_WRITER_ZERO_COPY_ENABLE =
+    SqlConfAdapter.buildConf("spark.sql.oap.index.file.writer.zero.copy.enable")
+      .internal()
+      .doc("To indicate whether enable/disable zero copy during copy index" +
+        " data from temporary file to final index file")
+      .booleanConf
+      .createWithDefault(true)
 }
